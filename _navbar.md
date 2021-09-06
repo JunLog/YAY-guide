@@ -1,3 +1,1 @@
-- 入门
-
-* [github](https://github.com/baici1)
+- [刷题去](https://leetcode-cn.com/problemset/all/)🏍️
