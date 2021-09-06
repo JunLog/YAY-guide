@@ -1,4 +1,4 @@
-<img src="/飞天舰.svg"  height="230" width="395">
+<img src="https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210906194903.svg"  height="230" width="395">
 
 # YAY-guide <small>1.0</small>
 
