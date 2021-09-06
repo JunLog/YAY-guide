@@ -1,10 +1,21 @@
-- **计算机基础**
-  - [计算机网络](./network/README.md)
-  - 计算机组成
-  - 操作系统
-  - 数据库
-- **面经**
-- **框架及源码**
-  - gin 框架
-- **语言基础**
-  - go
+- [**首页**](README)
+- 🎨**计算机基础**
+  - [计算机网络](./计算机基础/计算机网络/README.md)
+  - [操作系统](./计算机基础/操作系统/README.md)
+- 🎭**数据库** 
+  * [Mysql](./database/mysql/README.md)
+  * [redis](./database/redis/README.md)
+- 🐱‍🏍**项目相关**
+  * [项目教程](./项目相关/项目教程/README.md)
+  * [框架源码阅读](./项目相关/框架源码阅读/README.md)
+- 😇**面经**
+  - [面经总结](./面经/README.md)
+- 📜**语言基础**
+  - [go](./语言基础/go/README.md)
+- ⌛**Leetcode**
+  - [刷题小攻略](./Leetcode/README.md)
+- 🤪**炒鸡有趣的分享**
+  - [日常分享](./炒鸡有趣/README.md)
+- 🥴**树洞**
+  - [哭泣泣](./树洞/README.md)
+
