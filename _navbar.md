@@ -1,1 +1,1 @@
-- [刷题去](https://leetcode-cn.com/problemset/all/)🏍️
+- [GO！](README.md)🏍️
