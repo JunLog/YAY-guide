@@ -30,7 +30,7 @@
 
 |-- mode.go                     应用模式
 |-- mode_test.go
-|-- utils.go                    杂碎
+|-- utils.go                    杂七杂八
 |-- utils_test.go
 ```
 
@@ -226,7 +226,7 @@ type Engine struct {
 
 ## GET()
 
-我们来到了`GET()`函数，可以大致的了解他到底是怎么样发起请求的。
+我们来到了`GET()`函数，可以大致的了解他到底是怎么样注册路由的。
 
 进入他的函数里面发现
 
@@ -264,7 +264,7 @@ const (
 
 我们看到一段注释`GET 是 router.Handle("GET", path, handle) 的快捷方式。`
 
-其实我们demo发起的GET请求等价于
+其实我们demo注册的GET路由等价于
 
 ```go
 r.Handle("GET", "/hello",  func(c *gin.Context) {
@@ -296,10 +296,233 @@ Handle函数上的一段注释告诉你，其实你可以自定义请求方式�
 
 ```go
 func (group *RouterGroup) handle(httpMethod, relativePath string, handlers HandlersChain) IRoutes {
-	absolutePath := group.calculateAbsolutePath(relativePath)
+    //将当前路由组的base path与现在注册的路径结合
+	absolutePath := group.calculateAbsolutePath(relativePath)//==base+relative
+    //将路由组的中间件加到注册函数中间件之前
 	handlers = group.combineHandlers(handlers)
+    //注册路由
 	group.engine.addRoute(httpMethod, absolutePath, handlers)
+    //返回路由的所有信息
 	return group.returnObj()
 }
 ```
 
+我们接下来简单看看gin是如何注册路由的？
+
+```go
+func (engine *Engine) addRoute(method, path string, handlers HandlersChain) {
+	assert1(path[0] == '/', "path must begin with '/'")
+	assert1(method != "", "HTTP method can not be empty")
+	assert1(len(handlers) > 0, "there must be at least one handler")
+	//对三个参数的判断的处理
+	debugPrintRoute(method, path, handlers)
+	//打印相关信息
+    
+    //根据请求方式去构建了一个method树 ，都放在一样的请求方式的路由
+	root := engine.trees.get(method)
+    //如果没有，那么建立一个新的节点
+	if root == nil {
+		root = new(node)
+		root.fullPath = "/"
+		engine.trees = append(engine.trees, methodTree{method: method, root: root})
+	}
+    //注册路由，添加节点
+	root.addRoute(path, handlers)
+
+	// Update maxParams
+	if paramsCount := countParams(path); paramsCount > engine.maxParams {
+		engine.maxParams = paramsCount
+	}
+}
+```
+
+我们在10处与18处打个断点看看，怎么去增添的路由
+
+![image-20210921153735148](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921153735.png)
+
+他的handlers是三个，看具体的名字发现是Logger和recovery中间件和自定义的handlerfunc
+
+验证了`handlers = group.combineHandlers(handlers)` 我们的猜想
+
+当我们把if语句执行完后，看到engine他的tree建立一个节点
+
+![image-20210921153944032](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921153944.png)
+
+当我们进入`root.addRoute` 函数里面
+
+他建立一个节点n，里面放着路径和handlerFunc
+
+![image-20210921154235487](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921154235.png)
+
+我们再回到之前的engine看到
+
+![image-20210921154321537](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921154321.png)
+
+我们注册的/ping作为GET路由的根节点了
+
+同时此时的root也发生了改变
+
+![image-20210921154505390](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921154505.png)
+
+整体的过程就是
+
+* 当我注册一个路由时候，我会先查看路由树是否由这个请求方式
+* 如果没有，则建立一个节点，然后添加我注册路由的路径和中间件及函数
+* 当GET函数只有一个时候，他作为GET树的根节点
+
+
+
+>  我们现在了解到，当你注册路由时候，他会根据你的路由请求方式去建立一个树，当只有一个路由时候，让他作为这个树的根节点。我们后面会详细讲解gin的路由树
+
+
+
+## Run()
+
+最后一步了，这是他的启动函数。
+
+```go
+// Run 将路由器附加到 http.Server 并开始侦听和服务 HTTP 请求。
+// 它是 http.ListenAndServe(addr, router) 的快捷方式
+// 注意：除非发生错误，否则此方法将无限期地阻塞调用 goroutine。
+func (engine *Engine) Run(addr ...string) (err error) {
+	defer func() { debugPrintError(err) }()
+
+	trustedCIDRs, err := engine.prepareTrustedCIDRs()//获取ip地址
+	if err != nil {
+		return err
+	}
+	engine.trustedCIDRs = trustedCIDRs
+    address := resolveAddress(addr)//获取端口号，默认端口号是:8080
+	debugPrint("Listening and serving HTTP on %s\n", address)
+	err = http.ListenAndServe(address, engine)//建立web服务器
+	return
+}
+```
+
+其实你发现除去一些打印代码以及获取相关信息代码后，和你之前用原生的http包去建立的web服务器是一样的。
+
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+)
+
+func main() {
+    http.HandleFunc("/", indexHandler)
+
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+只不过他把run进行了封装，最重要的还是最后一段代码
+
+```go
+err = http.ListenAndServe(address, engine)//建立web服务器
+```
+
+咦？突然发现和原生好像还是有点不同的。
+
+> 原生的，他建立请求后面一个参数写的是`nil`
+
+> gin的Run,他建立请求后面却写了engine，之前我们说的engine实例。
+
+**为什么需要写这个呢？🙄🙄🙄**
+
+我们进入`http.ListenAndServe`看下
+
+```go
+// ListenAndServe 监听 TCP 网络地址 addr 然后调用
+// 与处理程序一起服务以处理传入连接的请求。
+// 接受的连接被配置为启用 TCP 保持连接。
+//
+// 处理程序通常为 nil，在这种情况下使用 DefaultServeMux。
+//
+// ListenAndServe 总是返回一个非零错误。
+func ListenAndServe(addr string, handler Handler) error {
+	server := &Server{Addr: addr, Handler: handler}
+	return server.ListenAndServe()
+}
+```
+
+其实这里没有特别的地方，关键点应该在`Handler`
+
+根据注释，我们猜测所有的请求经过Handler，然后处理请求。
+
+我们进入Handler看看，他是怎么定义的
+
+```go
+// 处理程序响应 HTTP 请求。
+//
+// ServeHTTP 应该将回复标头和数据写入 ResponseWriter
+// 然后返回。返回请求完成的信号；它
+// 使用 ResponseWriter 或从
+// Request.Body 在完成之后或同时完成
+// 服务 HTTP 调用。
+//
+// 取决于 HTTP 客户端软件、HTTP 协议版本，以及
+// 客户端和 Go 服务器之间的任何中介，它可能不会
+// 可以在写入后从 Request.Body 中读取
+// 响应写入器。谨慎的处理程序应该阅读 Request.Body
+// 首先，然后回复。
+//
+// 除了读取主体外，处理程序不应修改
+// 提供的请求。
+//
+// 如果 ServeHTTP 崩溃，服务器（ServeHTTP 的调用者）假设
+// 恐慌的影响与活动请求隔离。
+// 它恢复恐慌，将堆栈跟踪记录到服务器错误日志中，
+// 并关闭网络连接或发送 HTTP/2
+// RST_STREAM，取决于 HTTP 协议。中止处理程序
+// 客户端看到一个中断的响应，但服务器没有记录
+// 一个错误，带有值 ErrAbortHandler 的恐慌。 
+type Handler interface {
+	ServeHTTP(ResponseWriter, *Request)
+}
+```
+
+根据注释，看来Handler是一个接口，**只要传入任何实现了ServeHTTP接口的实例，所有HTTP的请求，就都交给了该实例去处理。**
+
+engine实现的ServeHTTP接口
+
+```go
+// ServeHTTP conforms to the http.Handler interface.
+func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    //从池子中建立一个空白的Context对象
+	c := engine.pool.Get().(*Context)
+	c.writermem.reset(w)
+	c.Request = req
+	c.reset()
+
+	engine.handleHTTPRequest(c)
+	//释放刚才建立的c
+	engine.pool.Put(c)
+}
+```
+
+我们打个断点，发起个请求，看看这里是怎么处理HTTP请求的。
+
+![image-20210921162439830](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921162439.png)
+
+他会将`http.Request`和`http.ResponseWrite`都会写入到c里面。
+
+然后交到了gin具体的处理HTTP函数里面了。
+
+经过处理后c的信息发生了改变
+
+![image-20210921162806155](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921162806.png)
+
+估计已经将handlerfunc函数的返回信息给到了请求响应报文里面了。
+
+
+
+## 总结
+
+根据官方给的demo，我们了解到他的基本运行情况。
+
+* `gin.Default()` 建立默认的engine实例（带有logger，recovery的中间件）
+* `r.GET`注册路由，gin会建立一个路由树出来，方便查找。
+* `r.Run() ` 建立web服务器，监听HTTP请求，由于engine实现了ServeHTTP接口，所以所有的请求都会交到engine去处理
+
+这样看来engine是gin框架的核心。
