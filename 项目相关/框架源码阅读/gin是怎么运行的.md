@@ -86,7 +86,7 @@ func main() {
 func Default() *Engine {
 	debugPrintWARNINGDefault()//进行debug，告知一些信息。
 	engine := New()//// New returns 一个新的空白的engine，没有任何中间件
-	engine.Use(Logger(), Recovery())//这里会给engine带上Logger和recovery的中间件
+	engine.Use(Logger(), Recovery())//这里会给engine带上Logger和recovery的handlerfunc
 	return engine
 }
 ```
@@ -224,6 +224,8 @@ type Engine struct {
 
 我们了解到了engine大致的结构如此，后面我们一个一个讲解重要的engine的字段。
 
+> 现在我们已经知道了，Default函数的作用是返回engine实例，你后续的操作都是在这个实例上进行的。
+
 ## GET()
 
 我们来到了`GET()`函数，可以大致的了解他到底是怎么样注册路由的。
@@ -231,7 +233,7 @@ type Engine struct {
 进入他的函数里面发现
 
 ```go
-// GET is a shortcut for router.Handle("GET", path, handle).
+//GET 是 router.Handle("GET", path, handle) 的快捷方式。
 func (group *RouterGroup) GET(relativePath string, handlers ...HandlerFunc) IRoutes {
 	return group.handle(http.MethodGet, relativePath, handlers)
 }
@@ -239,7 +241,7 @@ func (group *RouterGroup) GET(relativePath string, handlers ...HandlerFunc) IRou
 
 他的这个方法的承载着是`*RouterGroup` 
 
-既然返回的engine实例可以调用此方法说明，`engine`有`RouterGroup`这个字段。我们返回去看，确实有这个字段
+既然我们利用**返回的engine实例**可以调用此方法说明，`engine`应该有`RouterGroup`这个字段。我们返回去看，确实有这个字段
 
 ![image-20210920212757079](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210920212804.png)
 
@@ -264,7 +266,7 @@ const (
 
 我们看到一段注释`GET 是 router.Handle("GET", path, handle) 的快捷方式。`
 
-其实我们demo注册的GET路由等价于
+其实我们demo注册的GET路由**等价于**
 
 ```go
 r.Handle("GET", "/hello",  func(c *gin.Context) {
@@ -288,17 +290,17 @@ func (group *RouterGroup) Handle(httpMethod, relativePath string, handlers ...Ha
 }
 ```
 
-Handle函数上的一段注释告诉你，其实你可以自定义请求方式的。但请求的方式是一个大写字母的字符串。
+Handle函数上的一段注释告诉你，其实你可以自定义请求方式的。但请求的方式是一个**只包含大写字母的字符串**。
 
-发现重点依旧不在此处，发现无论是`r.GET`还是`r.Handle`都指向`group.handle` 
+发现重点依旧不在此处，接着发现到无论是`r.GET`还是`r.Handle`都返回`group.handle` 
 
-`group.handle`函数如下
+我们来看看`group.handle`函数如下
 
 ```go
 func (group *RouterGroup) handle(httpMethod, relativePath string, handlers HandlersChain) IRoutes {
     //将当前路由组的base path与现在注册的路径结合
 	absolutePath := group.calculateAbsolutePath(relativePath)//==base+relative
-    //将路由组的中间件加到注册函数中间件之前
+    //将路由组handlerFunc加到注册函数handlerFunc之前
 	handlers = group.combineHandlers(handlers)
     //注册路由
 	group.engine.addRoute(httpMethod, absolutePath, handlers)
@@ -344,7 +346,7 @@ func (engine *Engine) addRoute(method, path string, handlers HandlersChain) {
 
 验证了`handlers = group.combineHandlers(handlers)` 我们的猜想
 
-当我们把if语句执行完后，看到engine他的tree建立一个节点
+当我们把if语句执行完后，看到engine他的tree建立一个空节点
 
 ![image-20210921153944032](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921153944.png)
 
@@ -369,8 +371,6 @@ func (engine *Engine) addRoute(method, path string, handlers HandlersChain) {
 * 当我注册一个路由时候，我会先查看路由树是否由这个请求方式
 * 如果没有，则建立一个节点，然后添加我注册路由的路径和中间件及函数
 * 当GET函数只有一个时候，他作为GET树的根节点
-
-
 
 >  我们现在了解到，当你注册路由时候，他会根据你的路由请求方式去建立一个树，当只有一个路由时候，让他作为这个树的根节点。我们后面会详细讲解gin的路由树
 
@@ -422,11 +422,11 @@ func main() {
 err = http.ListenAndServe(address, engine)//建立web服务器
 ```
 
-咦？突然发现和原生好像还是有点不同的。
+咦？😆😆😆突然发现和原生好像还是有点不同的。
 
-> 原生的，他建立请求后面一个参数写的是`nil`
+> 原生的-> 他建立请求后面一个参数写的是`nil`
 
-> gin的Run,他建立请求后面却写了engine，之前我们说的engine实例。
+> gin的Run-> 他建立请求后面却写了engine，之前我们说的engine实例。
 
 **为什么需要写这个呢？🙄🙄🙄**
 
@@ -503,9 +503,11 @@ func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 我们打个断点，发起个请求，看看这里是怎么处理HTTP请求的。
 
-![image-20210921162439830](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921162439.png)
+先建立一个空白的Context对象
 
 他会将`http.Request`和`http.ResponseWrite`都会写入到c里面。
+
+![image-20210921162439830](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210921162439.png)
 
 然后交到了gin具体的处理HTTP函数里面了。
 
@@ -515,7 +517,7 @@ func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 估计已经将handlerfunc函数的返回信息给到了请求响应报文里面了。
 
-
+然后会释放这个c，之后http包会返回执行完的结果。也就是`ResponsWriter`里面的内容
 
 ## 总结
 
@@ -525,4 +527,4 @@ func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 * `r.GET`注册路由，gin会建立一个路由树出来，方便查找。
 * `r.Run() ` 建立web服务器，监听HTTP请求，由于engine实现了ServeHTTP接口，所以所有的请求都会交到engine去处理
 
-这样看来engine是gin框架的核心。
+>  这样看来engine是gin框架的核心,同时Context对象是gin框架的重心所在。
