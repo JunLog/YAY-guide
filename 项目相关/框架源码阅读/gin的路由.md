@@ -35,7 +35,7 @@ func main() {
 			"message": "about",
 		})
 	})
-	r.GET("/about/:work", func(c *gin.Context) {
+	r.GET("/about/*work", func(c *gin.Context) {
 		c.JSON(200,gin.H{
 			"work":c.Param("work"),
 		})
@@ -593,6 +593,20 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 
 ![image-20210925180443801](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210925180443.png)
 
+> 温馨提示：上面为空，是因为举例太特殊了。
+>
+> 如果是以下三个路由注册。
+>
+> `/about/ping/*work`
+>
+> `/about/ping`
+>
+> `/about/hello`
+>
+> 情况就会不一样了。
+>
+> ![image-20210926111834314](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210926111841.png)
+
 **通配符：路由**
 
 ```go
@@ -918,7 +932,7 @@ walk: // Outer loop for walking the tree
 当我发起`GET /ssss/intro` 这个请求时候。
 
 * 他会先根据根节点的path，获取后续的节点，然后靠首字母查询子树，如果没有找到，就定义成是通配符的路由
-* 因为通配符的路由都会放在最后，所以直接找根节点的最后一个子树
+* 因为通配符的路由都会放在最后，所以直接找根节点的最后一个子树（可以看`addChild`这个函数）
 * 根据节点类型判断通配符，此时判断的是param
 * 然后截取路由，根据“/” 截取到了 ”ssss“
 * 他就会与当前子树的根节点“:leng”进行匹配,获得param的
