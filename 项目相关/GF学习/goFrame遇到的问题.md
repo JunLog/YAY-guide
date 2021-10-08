@@ -12,3 +12,12 @@
 
 ![image-20210930213736461](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20210930213736.png)
 
+## 配置文件输出在本地
+
+如果你的**日志文件**在C盘，而不是在你的项目文件夹里面，那么就是你的GF配置的问题。
+
+![image-20211006191900739](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20211006191900.png)
+
+配置文件的路径请用**相对路径**。
+
+![image-20211006191931062](https://cdn.jsdelivr.net/gh/baici1/image-host/newimg/20211006191931.png)
