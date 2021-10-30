@@ -327,3 +327,6 @@ newcap=5，定义是int类型
 
 [深入解析 Go 中 Slice 底层实现](https://halfrost.com/go_slice/#toc-0)
 
+## 奇怪的问题
+
+1. 为什么`slice`的扩容规则是这样的？为什么容量大于1024就扩容1.25倍呢？

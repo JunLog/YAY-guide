@@ -1,1 +1,1 @@
-- [GO！](README.md)🏍️
+- [GO！](./README.md)🏍️
