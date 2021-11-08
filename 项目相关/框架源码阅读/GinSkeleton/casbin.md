@@ -1,6 +1,6 @@
 # casbin
 
-> 推荐学习：[casbin开发文档](https://www.kancloud.cn/oldlei/casbin/1289451)
+> 推荐学习：[casbin开发文档](https://casbin.org/docs/zh-CN/overview)
 >
 > [Go 每日一库之 casbin](https://darjun.github.io/2020/06/12/godailylib/casbin/)
 >
