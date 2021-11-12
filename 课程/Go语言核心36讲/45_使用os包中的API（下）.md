@@ -25,7 +25,7 @@
     func Create(name string) (*File, error) {
      return OpenFile(name, O_RDWR|O_CREATE|O_TRUNC, 0666)
     }
-    
+
 
 `os.Create`函数在调用`os.OpenFile`函数的时候，给予的操作模式是`os.O_RDWR`、`os.O_CREATE`和`os.O_TRUNC`的组合。
 
