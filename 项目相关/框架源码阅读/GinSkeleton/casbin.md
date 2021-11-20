@@ -194,3 +194,4 @@ m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && r.obj == p.obj && r.act == p.act
 | 明确优先级         | [priority_model_explicit](https://github.com/casbin/casbin/blob/master/examples/priority_model_explicit.conf) | [priority_policy_explicit.csv](https://github.com/casbin/casbin/blob/master/examples/priority_policy_explicit.csv) |
 | 主体优先级         | [subject_priority_model.conf](https://github.com/casbin/casbin/blob/master/examples/subject_priority_model.conf) | [subject_priority_policyl.csv](https://github.com/casbin/casbin/blob/master/examples/subject_priority_policy.csv) |
 
+这一块学的不太好！！！有点点迷糊！
