@@ -14,7 +14,6 @@
   * [雪花算法](./雪花算法.md)
   * [验证码](./验证码.md)
   * [RabbitMq](./RabbitMq.md)
-  * [casbin](./casbin.md)
   * [command](./command.md)
 * 设计模式
   * [工厂模式](./工厂模式.md)

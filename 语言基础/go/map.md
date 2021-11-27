@@ -232,6 +232,23 @@ slice、function value、map是不可比较的(但是这三种类型都可以和
 
 Go语言中的map通过**与运算**找桶的编号，发生**哈希冲突**时候，采用**拉链法**解决，当**负载因子**超过`6.5`时候，发生**翻倍扩容**，如果溢出桶数量过多，那么采用**等量扩容**。采用**渐进式**迁移旧桶键值对。
 
+## 使用注意
+
+```go
+func main(){
+	find:=map[int]int{}
+	find[1]=0
+	idx:=0
+    //在这里的短变量声明，不会对 idx 进行赋值处理，而是重新声明值。注意注意！
+	if idx,ok:=find[1];!ok {
+		println(111)
+	}
+	println(idx)
+}
+```
+
+
+
 ## 参考文章
 
  [【Golang】图解map](https://mp.weixin.qq.com/s/0sjLD4_12Ql0QeWsO_A5pQ) 
