@@ -139,7 +139,7 @@ type _defer struct {
 //在结构体后面还有 8 个字节用于保存传递给 A1 的参数 a
 ```
 
-然后这个 _defer 结构体就会被添加到 defer 链表头，此时 deferproc 注册结束。
+然后这个 `_defer` 结构体就会被添加到 defer 链表头，此时 `deferproc` 注册结束。
 
 > *频繁的堆分配势必影响性能，所以Go语言会预分配不同规格的deferpool，执行时从空闲_defer中取一个出来用。没有空闲的或者没有大小合适的，再进行堆分配。用完以后，再放回空闲_defer池。这样可以避免频繁的堆分配与回收。*
 
@@ -264,3 +264,212 @@ func A1(){
 2.  `defer` 信息保存到链表，而**链表操作比较慢。**
 
 但是，`defer` 作为一个关键的语言特性，怎能如此受人诟病？所以 `GO` 语言在 1.13 和1.14 中做出了不同的优化。
+
+## defer1.13
+
+我们来看看 `defer1.13` 到底升级了啥？
+
+`Go1.13` 中 `defer` 性能的优化点，主要集中在减少 `defer` 结构体堆分配。
+
+```go
+func A1(a int) {
+	fmt.Println(a)//1
+}
+func A() {
+	a, b := 1, 2
+	defer A1(a)
+
+	a = a + b
+	fmt.Println(a, b) //3,2
+}
+func main()  {
+	A()
+}
+```
+
+`defer1.13` 编译后的伪指令是这样的：
+
+```go
+func A() {
+    var d struct {
+        runtime._defer
+        i int
+    }
+    d.siz = 0
+    d.fn = A1
+    d.i = 10
+    r := runtime.deferprocStack(&d._defer)
+    if r > 0 {
+        goto ret
+    }
+    // code to do something
+    a = a + b
+	fmt.Println(a, b) //3,2
+    
+    runtime.deferreturn()
+    return
+ret:
+    runtime.deferreturn()
+}
+```
+
+你会发现好像和 `defer 1.12` 做了很大的改变。
+
+| 结构                           | defer1.12                                                    | defer1.13                                                    |
+| ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| _defer 的位置                  | 当执行 deferproc 函数时候会在堆上开辟一段空间专门存储 _defer 结构体 | 会在函数调用栈直接分配空间存储 defer 结构体相关字段。        |
+| 参数                           | 会存储在 _defer 结构体后面的空间，使用时候需要从堆上拷贝到函数调用栈 | 参数则存储在函数的局部变量空间。使用时候从栈上拷贝变量到参数空间 |
+| _defer 结构体添加到 defer 链表 | 当堆上存储 _defer 结构体后，就会将结构体分配添加到链表头上。 | runtime.deferprocStack 则会把栈上分配的_defer 结构体注册到 defer 链表 |
+
+从上面伪指令，你会发现多了一个结构体 d，它由两部分组成分别是 `runtime._defer` 结构体，传给 `defer` 函数 `A1` 的参数。
+
+值得注意的是，1.13 版本并不是所有的 defer 都能够在栈上进行分配空间。循环中的 `defer`，无论是显示的 `for` 循环，还是 `goto` 形成的隐式循环，都只能使用 `1.12` 版本中的处理方式在**堆上分配**。即使只执行一次的 `for` 循环也是一样。
+
+```go
+//显示循环
+for i:=0; i< n; i++{
+    defer B(i)
+}
+......
+
+//隐式循环
+again:
+    defer B()
+    if i<n {
+        n++
+        goto again
+    }
+```
+
+所以为了区分 `_defer` 结构体存储的位置，在 `defer1.13` 中，`runtime._defer` 结构体增加了一个字段 **heap**，用于标识是否为堆分配。
+
+```go
+type _defer struct {
+    siz       int32 //deferproc第一个参数传入，就是defer函数参数加返回值的总大小。
+    started   bool //标识defer函数是否已经开始执行；
+    heap      bool       //标识是否为堆分配
+    sp        uintptr // sp at time of defer 就是注册defer函数的函数栈指针；
+    pc        uintptr //是deferproc函数返回后要继续执行的指令地址；
+    fn        *funcval //由deferproc的第二个参数传入，也就是被注册的defer函数；
+    _panic    *_panic // panic that is running defer 是触发defer函数执行的panic指针，正常流程执行defer时它就是nil；
+    link      *_defer //自然是链到之前注册的那个_defer结构体。
+ }
+//参数和返回值这段空间会直接分配在_defer结构体后面，用于在注册时保存给defer函数传入的参数，并在执行时直接拷贝到defer函数的调用者栈上。
+```
+
+`defer` 函数执行在 `1.13` 中没有变化，依旧通过 `deferreturn` 实现，这一次的 `_defer` 结构体后面的参数和返回值空间，不是从堆拷贝到栈上，而是从栈上的局部变量空间拷贝到参数空间，`defer` 函数通过相对寻址找到参数。
+
+`1.13` 版本的 `defer` 主要通过减少了 `_defer` 结构体的堆分配，达到了性能优化在 `30%` 左右。好像只解决了第一个问题，仍然在使用 `defer` 链表。在 `1.14` 版本又会又怎么样的优化呢？
+
+## defer1.14
+
+我们举一个例子看看到底做了怎么样的优化呢？
+
+```go
+func A(i int) {
+    defer A1(i, 2*i)
+    if(i > 1){
+        defer A2("Hello", "eggo")
+    }
+    // code to do something
+    return
+}
+func A1(a,b int){
+    //......
+}
+func A2(m,n string){
+    //......
+}
+```
+
+定义的伪指令会是怎么样的。(以 `defer` 函数 `A1` 为例)
+
+```go
+func A(i int){
+    var a, b int = i, 2*i
+    //......
+        
+    A1（a, b）
+    return
+    //......
+}
+```
+
+
+
+| 结构                           | defer1.12                                                    | defer1.13                                                    | defer 1.14                                    |
+| ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------- |
+| _defer 的位置                  | 当执行 deferproc 函数时候会在堆上开辟一段空间专门存储 _defer 结构体 | 会在函数调用栈直接分配空间存储 defer 结构体相关字段。        | 没有_defer 结构体了                           |
+| 参数                           | 会存储在 _defer 结构体后面的空间，使用时候需要从堆上拷贝到函数调用栈 | 参数则存储在函数的局部变量空间。使用时候从栈上拷贝变量到参数空间 | 会提前定义并分配到函数调用栈局部变量上        |
+| _defer 结构体添加到 defer 链表 | 当堆上存储 _defer 结构体后，就会将结构体分配添加到链表头上。 | runtime.deferprocStack 则会把栈上分配的_defer 结构体注册到 defer 链表 | 没有_defer 链表了                             |
+| defer 函数执行                 | 利用 defer 链表找到 _defer 结构体然后找到函数入口地址 ，进行调用。 | 与 defer 1.12 一致                                           | 会将执行函数置于函数 A 前，当作普通函数调用。 |
+
+通过 `defer1.14` 这样的方式有以下几个优点：
+
+* 不用构建 `_defer` 结构体
+* 用不到 `defer` 链表
+
+但是好像这样的逻辑怎么用到 `defer` 函数 `A2` 呢？怎么判断我应不应该调用这个函数呢？
+
+`defer1.14` 通过增加一个标识变量 `df` 来解决这个问题。`df` 变量每一位对应当前函数的一个 `defer` 函数是否执行。
+
+函数 `A1` 需要被执行，那么 df|=1 方式将 `df` 第一位置为1，然后函数结束前通过判断 `df` 的第一位是否为 1，来决定是否执行。这样的逻辑对于函数 `A2` 也适用。
+
+```go
+func A(i int){
+    var df byte
+    //A1的参数
+    var a, b int = i, 2*i
+    df |= 1
+
+    //A2的参数
+    var m,n string = "Hello", "eggo"
+    if i > 1 {
+        df |= 2
+    }
+    //code to do something
+        
+    //判断A2是否要调用
+    if df&2 > 0 {
+        df = df&^2
+        A2(m, n)
+    }
+    //判断A1是否要调用
+    if df&1 > 0 {
+        df = df&^1
+        A1(a, b)
+    }
+    return
+    //省略部分与recover相关的逻辑
+}
+```
+
+`Go1.14` 把 `defer` 函数在当前函数内展开并直接调用，这种方式被称为 open coded defer。这种方式不仅不用创建 `_defer` 结构体，也脱离了 `defer` 链表的束缚。不过这种方式依然不适用于循环中的 `defer`，所以 `1.12` 版本 `defer` 的处理方式是一直保留的。
+
+## defer 提升后带来的后果
+
+我们一直讨论的是程序正常执行 defer 的处理逻辑，那么如果程序不正常执行了呢，发生了 `panic` 或者使用了 `untime.Goexit` 函数，当前的正常程序反而会不执行，而是去执行 `defer` 链表，可是在 `1.14` 版本里面并没有注册链表啊。
+
+`defer1.14` 版本的 `_defer` 结构体又增加了几个字段，使那些没有注册到链表的 `defer` 函数通过栈扫描来注册到链表里。
+
+```go
+
+type _defer struct {
+    siz       int32
+    started   bool
+    heap      bool
+    openDefer bool           //1
+    sp        uintptr
+    pc        uintptr
+    fn        *funcval
+    _panic    *_panic
+    link      *_defer 
+    fd        unsafe.Pointer //2
+    varp      uintptr        //3
+    framepc   uintptr        //4
+}
+```
+
+可是这样会导致 `defer` 确实变快了，但是 `panic` 却变慢了。
+
+我们后面看看 `panic` 又会有怎么样的优化呢？
