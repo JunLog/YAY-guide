@@ -1,6 +1,7 @@
 * 学习推荐
   * [各个资源推荐](./学习推荐.md)
 * 基础结构
+  * [Go语言必知](./Go语言必知.md)
   * [string](./string.md)
   * [map](./map.md)
   * [slice](./数组与slice.md)
@@ -13,4 +14,6 @@
   * [类型系统](./类型系统.md)
   * [interface](./interface.md)
   * [类型断言](./类型断言.md)
+  * [GPM](./GPM.md)
+
 
