@@ -122,7 +122,7 @@ func main()  {
 
 上图空缺的地方就是放参数与返回值的。编译器会在 `deferproc` 函数的两个参数后面开辟一段空间，用于存储 `defer` 函数 `A1` 的返回值和参数。同时一段空间也会通过值拷贝到 `_defer` 结构体后面。所以这里空缺的部分填写 `a=1`。
 
-![图片](https://mmbiz.qpic.cn/mmbiz_png/ibjI8pEWI9L6iaibdGLYroCCtK18JQJIyoLnVGiajuhV5yQpjLzS83xrCkmHK70d9D97DchK4JGoltSibrht2Jz8I3Q/640?wx_fmt=png&tp=webp&wxfrom=5&wx_lazy=1&wx_co=1)
+![图片](https://cdn.jsdelivr.net/gh/baici1/img-typora/20211205190600.webp)
 
 当 `deferproc` 函数执行时候，需要堆分配一段空间，用于存放 `_defer` 结构体以及 `defer` 函数传递的参数与返回值。现在看看这个堆空间的构成。
 

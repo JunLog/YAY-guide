@@ -9,6 +9,8 @@
 > [Golang并发编程-GPM协程调度模型原理及结构分析](https://juejin.cn/post/6976538466863546382#heading-0)
 >
 > [[典藏版]Golang调度器GPM原理与调度全分析](https://zhuanlan.zhihu.com/p/323271088)
+>
+> [Golang并发调度的GMP模型](https://juejin.cn/post/6886321367604527112#heading-0)
 
 ## hello world！
 
@@ -108,11 +110,136 @@ type m struct {
  }
 ```
 
+### P
 
+```go
+const (
+   _Pidle = iota //当前p尚未与任何m关联，处于空闲状态 ->0
+   _Prunning //当前p已经和m关联，并且正在运行g代码 ->1
+   _Psyscall  //当前p正在执行系统调用 ->2
+   _Pgcstop //当前p需要停止调度，一般在GC前或者刚被创建时 ->3
+   _Pdead //当前p已死亡，不会再被调度 ->4
+)
 
+type p struct {
+   status      uint32  //表示当前P的状态，为上述五个状态之一
+   schedtick   uint32  //调度计数器，每被调度一次则自增1
+   syscalltick uint32  //系统调用计数器，每进行一次系统调用则自增1
+   m           muintptr //即将要关联的m，M的nextp字段对应着该P
+   runqhead uint32 //可运行G队列头，标识目前正在运行的G
+   runqtail uint32  //可运行G队列尾
+   runq     [256]guintptr //可运行的G队列，默认容量为256个G
+   runnext guintptr //下一个将要运行的G
+   gFree struct { //空闲G列表，存储着状态为Gdead的G，当其数目过多时，将会被转移到调度器全局G列表，用于被其他P再次使用（相当于一个G缓存池）
+      gList
+      n int32
+   }
+}
 
+```
+
+`P` 的生命周期：
+
+![image.png](https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a8b1bab3f170480aac6592b2aa8afa57~tplv-k3u1fbpfcp-watermark.awebp)
+
+### G
+
+```go
+const (
+   _Gidle = iota //当前 G 刚被分配，还未初始化 ->0
+   _Grunnable //正在可运行队列等待运行 ->1
+   _Grunning  //正在运行中，执行G函数 ->2
+   _Gsyscall  //正在执行系统调用 ->3
+   _Gwaiting  //正在被阻塞，一般是该G正在执行网络I/O操作，或正在执行time.Timer、time.Sleep ->4
+   _Gmoribund_unused //_Gmoribund_unused is currently unused, but hardcoded in gdb ->5
+   _Gdead  //已经使用完正在闲置，放入空闲G列表中，可被再次使用（和P不同，P处于Pdead状态则无法被再次调度） ->6
+  _Genqueue_unused //_ Genqueue _ unused 当前未使用。 ->7
+   _Gcopystack //表示当前 G 的栈正在被移动，可能是因为栈的收缩或扩容 ->8
+   _Gscan         = 0x1000 //表明当前正在进行GC扫描，由于在GC扫描的过程中肯定会处于某个前置状态， 
+   _Gscanrunnable = _Gscan + _Grunnable //代表当前 G 正等待运行，同时栈正被 GC 扫描  // 0x1001
+   _Gscanrunning  = _Gscan + _Grunning //表示正处于 Grunning状态，同时栈在被 GC 扫描 // 0x1002
+   _Gscansyscall  = _Gscan + _Gsyscall //表示正处于 Gwaiting状态，同时栈在被 GC 扫描 // 0x1003
+   _Gscanwaiting  = _Gscan + _Gwaiting //表示正处于 Gsyscall状态，同时栈在被 GC 扫描 // 0x1004
+    _Gscanpreempted = _Gscan + _Gpreempted // 0x1009
+)
+
+type g struct {
+   stack       stack   // offset known to runtime/cgo //当前G所被分配的栈内存空间，由lo及hi两个内存指针组成
+   stackguard0 uintptr // offset known to liblink g0的最大栈内存地址，当超过了这个数值则需要进行栈扩张
+   stackguard1 uintptr //普通用户G的最大栈内存地址，当超过了这个数值则需要进行栈扩张
+   m              *m      // current m; offset known to arm liblink 当前关联该G实例的M实例
+   sched          gobuf  //记录G上下文环境，用于上下文切换
+   atomicstatus   uint32 //G的状态值，表示上述几个状态
+   waitreason     waitReason // if status==Gwaiting 处于Gwaiting的原因
+   preempt        bool       // preemption signal, duplicates stackguard0 = st 当前G是否可抢占
+   startpc        uintptr         // pc of goroutine function 当前G所绑定的函数内存地址
+}
+
+```
+
+`G` 生命周期：
+
+![image.png](https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c6c550b00bcd41ea9a3ff4222e87e40e~tplv-k3u1fbpfcp-watermark.awebp)
+
+### sched (调度器)
+
+```go
+type schedt struct {
+   // 全局唯一id
+   goidgen  uint64
+   // 记录的最后一次从i/o中查询G的时间
+   lastpoll uint64
+   // 互斥锁 
+   lock mutex
+   // M的空闲链表，通过m.schedlink组成一个M空闲链表
+   midle        muintptr
+   // 正处于自旋状态的M数量
+   nmidle       int32
+   // 已经被锁定且正在自旋的M数量
+   nmidlelocked int32
+   // 下一个M的id，或者是目前已存在的M数量
+   mnext        int64
+   // M数量的最大值
+   maxmcount    int32
+   // 已被释放掉的M数量
+   nmfreed      int64
+   // 系统所开启的协程数量（非用户协程）
+   ngsys uint32
+   // 空闲P列表
+   pidle      puintptr
+   // 空闲的P数量
+   npidle     uint32
+   // 全局的G队列
+   // 根据runqhead可以获取队列头的G及g.schedlink形成G链表
+   runqhead guintptr
+   runqtail guintptr
+   // 全局G队列大小
+   runqsize int32
+   // 等待释放的M列表
+   freem *m
+   // 是否需要暂停调度（通常因为GC带来的STW）
+   gcwaiting  uint32
+   // 需要停止但是仍为停止的P数量
+   stopwait   int32
+   // 实现stopwait事件通知
+   stopnote   note
+   // 停止调度期间是否进行系统监控任务
+   sysmonwait uint32
+   // 实现sysmonwait事件通知
+   sysmonnote note
+}
+
+```
+
+### 核心容器
+
+![image.png](https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c64fb28175494bb0b2419bd1fe0d760e~tplv-k3u1fbpfcp-watermark.awebp)
 
 ## 详解调度过程
 
-在程序初始化过程中，会进行调度器初始化，会按照 `GOMAXPROCS` 这个环境变量决定创建多个 `P`。保存在全局变量 `allp` 中，同时把第一个 `P` 与吗 `m0` 关联起来。
+## 系统初始化
+
+Go 程序的引导程序启动进行系统初始化，核心步骤：
+
+1. 
 
