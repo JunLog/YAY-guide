@@ -137,10 +137,6 @@
 └── vet #代码静态检查工具
 ```
 
-
-
-
-
 ## 参考文章
 
 [超详细Go语言源码目录说明](https://mp.weixin.qq.com/s/vJ-Z1tDmMVdrAyn-SZ0KLA)
