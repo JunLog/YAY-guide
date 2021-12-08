@@ -221,7 +221,105 @@ GLOBL	runtime·mainPC(SB),RODATA,$8
 
 我们在之前的分析里面了解到一些核心函数，现在我们来简单看看里面的逻辑，到底每个函数具体工作是什么？至于解析背后的原理，我们留到具体的章节去考虑。
 
-`check` 函数：
+`check` 函数，本质上是对编译器翻译工作的一个校验。
+
+```go
+//# runtime/runtime1.go
+func check() {
+    var (
+		a     int8
+		b     uint8
+		c     int16
+		d     uint16
+        //省略
+	)
+    type x1t struct {
+		x uint8
+	}
+	type y1t struct {
+		x1 x1t
+		y  uint8
+	}
+	var x1 x1t
+	var y1 y1t
+	// 校验 int8 类型 sizeof 是否为 1，下同
+	if unsafe.Sizeof(a) != 1 {
+		throw("bad a")
+	}
+    //省略
+    
+}
+```
+
+`args` 函数，将操作系统传递 `argc,argv` 两个参数赋值作为全局变量使用
+
+```go
+//# runtime/runtime1.go
+var (
+	argc int32
+	argv **byte
+)
+
+func args(c int32, v **byte) {
+	argc = c 
+	argv = v
+	sysargs(c, v)
+}
+```
+
+![img](https://golang.design/under-the-hood/assets/proc-stack.png)
+
+那么接下来调用系统特定的 sysargs 函数。
+
+```go
+//runtime/os_dragonfly.go
+func sysargs(argc int32, argv **byte) {
+    // 跳过 argv, envv 与第一个字符串为路径
+	n := argc + 1
+
+	//跳过 argv, envp 进入 auxv
+	for argv_index(argv, n) != nil {
+		n++
+	}
+
+	// skip NULL separator // 跳过 NULL 分隔符
+	n++
+	// 尝试读取 auxv
+	auxv := (*[1 << 28]uintptr)(add(unsafe.Pointer(argv), uintptr(n)*sys.PtrSize))
+	sysauxv(auxv[:])
+}
+
+func sysauxv(auxv []uintptr) {
+    // 依次读取 auxv 键值对
+	for i := 0; auxv[i] != _AT_NULL; i += 2 {
+		tag, val := auxv[i], auxv[i+1]
+		switch tag {
+		case _AT_PAGESZ:
+            // 读取内存页的大小
+			physPageSize = val
+		}
+	}
+}
+```
+
+在这里我已经懵了，已经涉及到了操作系统的底层那些内存页等等了。这里就不多去解释。我已经不懂了。😥
+
+`osinit` 函数，会获取CPU核数，还会获取当前操作系统的页存大小。
+
+```go
+//runtime/os_dragonfly.go
+func osinit() {
+    // 获取CPU核数
+	ncpu = getncpu()
+	if physPageSize == 0 {
+		physPageSize = getPageSize()
+	}
+}
+```
+
+
+
+
 
 ## 进一步参考文章
 
