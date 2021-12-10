@@ -5,6 +5,10 @@
 > [2.3 Go 程序启动引导](https://golang.design/under-the-hood/zh-cn/part1basic/ch02life/boot/)
 >
 > [Golang并发编程-GPM调度过程源码分析](https://juejin.cn/post/6976839612241018888#heading-3)
+>
+> [《Golang》深入Golang启动过程](http://www.pefish.club/2020/05/08/Golang/1005%E6%B7%B1%E5%85%A5Golang%E5%90%AF%E5%8A%A8%E8%BF%87%E7%A8%8B/)
+>
+> [**从源码角度看 Golang 的调度**](https://github.com/0voice/Introduction-to-Golang/blob/main/%E6%96%87%E7%AB%A0/%E4%BB%8E%E6%BA%90%E7%A0%81%E8%A7%92%E5%BA%A6%E7%9C%8B%20Golang%20%E7%9A%84%E8%B0%83%E5%BA%A6.md)
 
 ## 前言
 
@@ -16,7 +20,7 @@
 
 希望读者能够懂一点点的汇编语言。
 
-## 初始化
+## 汇编
 
 Go 程序启动需要对自身运行时进行初始化，其真正的程序入口在 `runtime` 包里面。
 
@@ -174,10 +178,10 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
 # 省略了一大段代码
 
 	// 创建一个新的 goroutine 来启动程序
-	MOVQ	$runtime·mainPC(SB), AX		// entry
+	MOVQ	$runtime·mainPC(SB), AX		// entry // entry mainPC方法（也就是runtime·main函数，是一个全局变量）压入AX寄存器
 	PUSHQ	AX
-	PUSHQ	$0			// arg size
-	CALL	runtime·newproc(SB)
+	PUSHQ	$0			// arg size 压入第一个参数到栈
+	CALL	runtime·newproc(SB) // 调用 newproc 函数创建一个新的g
 	POPQ	AX
 	POPQ	AX
 
@@ -217,11 +221,11 @@ GLOBL	runtime·mainPC(SB),RODATA,$8
 
 ![image-20211206191645379](https://cdn.jsdelivr.net/gh/baici1/img-typora/20211206191645.png)
 
-### 核心函数
+## 核心函数
 
 我们在之前的分析里面了解到一些核心函数，现在我们来简单看看里面的逻辑，到底每个函数具体工作是什么？至于解析背后的原理，我们留到具体的章节去考虑。
 
-`check` 函数，本质上是对编译器翻译工作的一个校验。
+`check` 函数，本质上是对编译器翻译工作的一个校验，再次检验类型的内存大小。
 
 ```go
 //# runtime/runtime1.go
@@ -269,7 +273,7 @@ func args(c int32, v **byte) {
 
 ![img](https://golang.design/under-the-hood/assets/proc-stack.png)
 
-那么接下来调用系统特定的 sysargs 函数。
+那么接下来调用系统特定的 `sysargs` 函数。
 
 ```go
 //runtime/os_dragonfly.go
@@ -317,9 +321,199 @@ func osinit() {
 }
 ```
 
+`schedinit` 函数，名字上是调度器的一个初始化，其实内部实际上干的事情都是一些核心部分的初始化，例如：栈，内存，gc，线程等等。
 
+这里的初始化也是有一定顺序规则的，至于为什么，可能是因为前面的函数为后面的函数提供一定的重要数据。
 
+```go
+// 引导的序列 is:
+//	call osinit
+//	call schedinit
+//	make & queue new G //将new G加入到队列中
+//	call runtime·mstart 
+// The new G calls runtime·main. 
+func schedinit() {
+	lockInit(&sched.lock, lockRankSched)
+    //省略 lockinit
 
+	//获取 g 的一个对象
+	_g_ := getg()
+
+	sched.maxmcount = 10000 // 限制最大系统线程数量
+
+	// The world starts stopped.  用于lock rank,
+	worldStopped()
+
+	moduledataverify()
+	stackinit() // 初始化执行栈
+	mallocinit() // 初始化内存分配器
+	fastrandinit() // must run before mcommoninit // 随机数初始化，
+	mcommoninit(_g_.m, -1) 	// 初始化当前系统线程 //预分配的 ID 可以作为“id”传递，或者通过传递 -1 来省略。
+	cpuinit()       // must run before alginit // 初始化CPU信息
+	alginit()       // maps must not be used before this call // 主要初始化哈希算法的值
+	modulesinit()   // provides activeModules // activeModules数据初始化，主要是用于gc的数据,
+	typelinksinit() // uses maps, activeModules // 主要初始化activeModules的typemap
+	itabsinit()     // uses activeModules  // 初始化interface相关，
+
+	sigsave(&_g_.m.sigmask) // 初始化m的signal mask
+	initSigmask = _g_.m.sigmask
+
+	goargs()  // 参数放到argslice变量中
+	goenvs()  // 环境变量放到envs中
+	parsedebugvars()  // 初始化一系列debug相关的变量
+	gcinit()  // 垃圾回收器初始化
+	//调度器加锁
+	lock(&sched.lock)
+	sched.lastpoll = uint64(nanotime())
+    // 创建 P
+	// 通过 CPU 核心数和 GOMAXPROCS 环境变量确定 P 的数量
+	procs := ncpu // // procs设置成cpu个数
+	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {  // 如果GOMAXPROCS有设置，则覆盖procs的值
+		procs = n
+	}
+    // 增加或减少p的实例个数(填procs个p到存放所有p的全局变量allp中)，多了就清理多的p，少了就新建p，但是并没有启动m，m启动后会从这里取p并挂钩上
+	if procresize(procs) != nil {
+		throw("unknown runnable goroutine during bootstrap")
+	}
+    //调度器解锁
+	unlock(&sched.lock)
+	//省略一大段代码
+}
+```
+
+`newproc` 函数，当前 `M` 的 `P` 下创建了一个新的 `G`，其实也就是我们期待的 `runtime.main`，不会一开始就直接添加到运行队列中，而是放到 `P` 的本地队列，成为下一个运行的 `G`。
+
+> 为什么这里一定要放到 runtime.runnext，不是运行队列中呢？
+
+我的猜测当前是 `G0`,而且此时其实 `m` 的对应线程并没有创建出来，现在只是再初始化一些 `m` 的相关属性，所以不适合直接放入到运行队列中。
+
+```go
+func newproc(siz int32, fn *funcval) {
+	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
+	gp := getg() // 获取当前goroutine的指针，
+	pc := getcallerpc() // 获取伪寄存器PC的内容，函数也是由编译器填充
+	systemstack(func() {
+        //创建一个新的G
+		newg := newproc1(fn, argp, siz, gp, pc) //关键函数
+		//获取P的指针
+		_p_ := getg().m.p.ptr()
+        //将新创建的的 G，添加到 runtime.runnext 队列中如果运行队列满了，就添加到全局队列供其他P进行调度
+		runqput(_p_, newg, true)
+		//尝试再添加一个 P 来执行 G 的。当 G 变为可运行时调用（newproc，ready）。
+		if mainStarted {
+			wakep()
+		}
+	})
+}
+func newproc1(fn *funcval, argp unsafe.Pointer, narg int32, callergp *g, callerpc uintptr) *g {
+    (...)
+	_g_ := getg()
+	_p_ := _g_.m.p.ptr()
+	newg := gfget(_p_) //// 从p的dead g列表中获取一个g对象，没有的话就从全局g列表中抓取一批g对象放入p的的dead g列表中，再从中获取。g在运行结束后会重新放入dead g列表等待重复利用
+	if newg == nil { // 一开始启动应该取不到
+		newg = malg(_StackMin) // 新建一个g
+		casgstatus(newg, _Gidle, _Gdead) // 设置g的状态从idle到dead
+		allgadd(newg) // 使用 G-> 状态的 Gdead 发布，因此 GC 扫描程序不会查看未初始化的堆栈。
+	}
+    (...)
+
+    (...)//关于newg的属性配置
+	newg.startpc = fn.fn // 将mainPC方法(就是runtime·main方法)指定为这个协程的启动方法
+	if _g_.m.curg != nil {
+		newg.labels = _g_.m.curg.labels
+	}
+	if isSystemGoroutine(newg, false) {
+		atomic.Xadd(&sched.ngsys, +1)
+	}
+	// Track initial transition?
+	newg.trackingSeq = uint8(fastrand())
+	if newg.trackingSeq%gTrackingPeriod == 0 { // 判断是不是系统协程（g启动函数包含runtime.*前缀的都是系统协程，除了runtime.main, runtime.handleAsyncEvent）
+		newg.tracking = true
+	}
+	casgstatus(newg, _Gdead, _Grunnable)  // 设置g的状态从dead状态到runnable状态
+
+	（...）
+	releasem(_g_.m) // 放弃独占m
+
+	return newg
+}
+
+```
+
+mstart 函数，主要是启动 M，并且开启调度（我们下一次再讨论这个）。
+
+```go
+//mstart 是 new Ms 的入口点。它是用汇编编写的，使用 ABI0，标记为 TOPFRAME，并调用 mstart0。
+func mstart()
+func mstart0() {
+	_g_ := getg()
+
+	osStack := _g_.stack.lo == 0
+	if osStack {
+//从系统堆栈初始化堆栈边界。 Cgo 可能在 stack.hi 中保留了堆栈大小。 minit 可能会更新堆栈边界。注意：这些界限可能不是很准确。我们将 hi 设置为 &size，但它上面还有一些东西。 1024 应该可以弥补这一点，但有点武断。
+		size := _g_.stack.hi
+		if size == 0 {
+			size = 8192 * sys.StackGuardMultiplier
+		}
+		_g_.stack.hi = uintptr(noescape(unsafe.Pointer(&size)))
+		_g_.stack.lo = _g_.stack.hi - size + 1024
+	}
+	//初始化堆栈保护，以便我们可以开始调用常规
+	// Go code.
+	_g_.stackguard0 = _g_.stack.lo + _StackGuard
+	// 这是 g0，所以我们也可以调用 go:systemstack 函数来检查 stackguard1。
+	_g_.stackguard1 = _g_.stackguard0
+	mstart1()
+
+	// Exit this thread.
+	if mStackIsSystemAllocated() {
+		// Windows、Solaris、illumos、Darwin、AIX 和Plan 9 总是system-allocate stack，但是在mstart 之前放在_g_.stack 中，所以上面的逻辑还没有设置osStack。
+		osStack = true
+	}
+	mexit(osStack)
+}
+func mstart1() {
+	_g_ := getg()
+
+	if _g_ != _g_.m.g0 { // 判断是不是g0
+		throw("bad runtime·mstart")
+	}
+	_g_.sched.g = guintptr(unsafe.Pointer(_g_))
+	_g_.sched.pc = getcallerpc()   // 保存pc、sp信息到g0
+	_g_.sched.sp = getcallersp()
+
+	asminit() // asm初始化
+	minit()  // m初始化
+
+	// Install signal handlers; after minit so that minit can
+	// prepare the thread to be able to handle the signals.
+	if _g_.m == &m0 {
+		mstartm0()  // 启动m0的signal handler
+	}
+
+	if fn := _g_.m.mstartfn; fn != nil {
+		fn()
+	}
+
+	if _g_.m != &m0 { // 如果不是m0
+		acquirep(_g_.m.nextp.ptr())
+		_g_.m.nextp = 0
+	}
+	schedule()   // 进入调度。这个函数会阻塞
+}
+```
+
+## 总结流程
+
+* 入口：rt0_windows_amd64.s 汇编函数
+* 初始化 m0,g0
+* check ：检查各个类型占用内存大小的正确性
+* args ： 设置 `argc`、`argv`参数
+* osinit ：操作系统相关的 `init`，比如页大小
+* schedinit ：初始化所有 P，初始化其他细节
+* newproc ：当前`m（m0）`的 `p` 下新建一个 `g`，指定为 `p` 的下一个运行的 `g`
+* mstart ：m0启动，接着进入调度，这里阻塞
+* abort：退出
 
 ## 进一步参考文章
 
@@ -328,3 +522,9 @@ func osinit() {
 > [Windows平台安装GDB调试器](http://c.biancheng.net/view/8296.html)
 >
 > [[go runtime] - go程序启动过程](https://juejin.cn/post/6942509882281033764)
+
+## tips
+
+> 自己整体流程过了一遍后，感觉还是有点点糊糊的。可能自己对操作系统的知识还是不够多，不够支撑自己理解整个过程，但是不用慌。慢慢来！加油团子！
+>
+> 后续会逐渐学习操作系统，然后补充相关的细节。
